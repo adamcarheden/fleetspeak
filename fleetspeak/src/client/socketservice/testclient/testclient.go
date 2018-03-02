@@ -21,10 +21,13 @@ import (
 
 	"flag"
 	log "github.com/golang/glog"
+  "github.com/golang/protobuf/ptypes"
 
 	"github.com/google/fleetspeak/fleetspeak/src/client/channel"
 	"github.com/google/fleetspeak/fleetspeak/src/client/service"
 	"github.com/google/fleetspeak/fleetspeak/src/client/socketservice/client"
+	fsss "github.com/google/fleetspeak/fleetspeak/src/client/socketservice/proto/fleetspeak_socketservice"
+	fspb "github.com/google/fleetspeak/fleetspeak/src/common/proto/fleetspeak"
 )
 
 var mode = flag.String("mode", "loopback", "Mode of operation.")
@@ -43,6 +46,8 @@ func main() {
 	}
 
 	switch *mode {
+	case "single":
+		single()
 	case "loopback":
 		loopback()
 	case "ackLoopback":
@@ -57,6 +62,26 @@ func main() {
 func openChannel() *channel.RelentlessChannel {
 	log.Infof("opening relentless channel to %s", *socketPath)
 	return client.OpenChannel(*socketPath)
+}
+
+func single() {
+	log.Info("starting single")
+
+	msg := fsss.Config{ ApiProxyPath: "Not a real config. We just need a protobuf" }
+  data, err := ptypes.MarshalAny(&msg)
+  if err != nil {
+    log.Fatalf("Failed to marshal message: %s", err)
+  }
+  m := fspb.Message{
+    Destination: &fspb.Address{ ServiceName: "TestSocketService" },
+    MessageType: "Single",
+    Data: data,
+  }
+  log.Infof("Sending %v", m)
+
+	ch := openChannel()
+	ch.Out <- service.AckMessage{M: &m}
+	log.Infof("Message sent.")
 }
 
 func loopback() {

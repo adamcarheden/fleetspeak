@@ -133,6 +133,77 @@ func exerciseLoopback(t *testing.T, socketPath string) {
 	log.Infof("looped %d messages", len(msgs))
 }
 
+func TestSingle(t *testing.T) {
+	tmpDir, cleanUpFn, err := getTempDir()
+	if err != nil {
+		t.Fatalf("Failed to create tempdir for test: %v", err)
+	}
+	defer cleanUpFn()
+	socketPath := path.Join(tmpDir, "Single")
+
+	ssc := sspb.Config{
+		ApiProxyPath: socketPath,
+	}
+	sscAny, err := ptypes.MarshalAny(&ssc)
+	if err != nil {
+		t.Fatalf("ptypes.MarshalAny(*socketservice.Config): %v", err)
+	}
+	t.Logf("Creating test service")
+	s, err := Factory(&fspb.ClientServiceConfig{
+		Name:   "TestSocketService",
+		Config: sscAny,
+	})
+	if err != nil {
+		t.Fatalf("Factory(...): %v", err)
+	}
+
+	sc := clitesting.MockServiceContext{
+		OutChan: make(chan *fspb.Message, 5),
+	}
+	t.Logf("Starting socket service at %s", socketPath)
+	go func() {
+		if err := s.Start(&sc); err != nil {
+			t.Fatalf("socketservice.Start(...): %v", err)
+		}
+		defer func() {
+			// We are shutting down this service. Give the service a bit of time to ack
+			// the messages to the testclient, so that they won't be repeated.
+			time.Sleep(time.Second)
+			if err := s.Stop(); err != nil {
+				t.Errorf("Error stopping service: %v", err)
+			}
+		}()
+	}()
+
+	t.Logf("Starting test client")
+	cmd := exec.Command(testClient(), "--mode=single", "--socket_path="+socketPath)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("cmd.Start() returned error: %v", err)
+	}
+	defer func() {
+		if err := cmd.Process.Kill(); err != nil {
+			t.Errorf("failed to kill testclient[%d]: %v", cmd.Process.Pid, err)
+		}
+		if err := cmd.Wait(); err != nil {
+			if !isErrKilled(err) {
+				t.Errorf("error waiting for testclient: %v", err)
+			}
+		}
+	}()
+
+	for i := 5; i>0; i-- {
+		select {
+		case g := <-sc.OutChan:
+			t.Logf("Got message '%s' from client. Horray!", g)
+			return
+		default:
+			t.Logf("No message yet, sleeping for up to %d more second(s)...", i)
+			time.Sleep(time.Second)
+		}
+	}
+	t.Fatalf("Never got message from client")
+}
+
 func TestLoopback(t *testing.T) {
 	tmpDir, cleanUpFn, err := getTempDir()
 	if err != nil {
